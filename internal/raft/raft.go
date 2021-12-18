@@ -247,14 +247,22 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 				exit = true
 				//return false
 			case err != nil:
-				//fmt.Println(nr.Yo, ". otro try candidato, Error Append Entries")
+				fmt.Println(nr.Yo, ". Error Append Entries")
 				time.Sleep(1 * time.Second)
 				err = rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.AppendEntries", args, reply, timeout)
 
-			case !reply.Success:
-				args.PrevLogIndex = args.PrevLogIndex - 1
+			case !reply.Success && len(args.Entries) > 0:
+				fmt.Println(nr.Yo, ". No se ha conseguido replicar entrada a", nodo)
+
+				nr.nextIndex[nodo]--
+				entries := nr.log[(nr.nextIndex[nodo]):(nr.commitIndex + 1)]
+				args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[nodo] - 1, nr.log[nr.nextIndex[nodo]-1].Indice, entries, nr.commitIndex}
 				rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.AppendEntries", args, reply, timeout)
 
+			case reply.Success && len(args.Entries) > 0:
+				//Update nextIndex and matchIndex
+				nr.nextIndex[nodo] = nr.commitIndex + 1
+				exit = true
 			default:
 				fmt.Println(nr.Yo, ". Default enviarAppendEntries")
 				//os.Exit(1)
@@ -344,15 +352,15 @@ func (nr *NodoRaft) obtenerEstado() (int, int, bool, int) {
 // Cuarto valor es el lider, es el indice del líder si no es él
 func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 	bool, int, string) {
-	indice := -1
-	mandato := -1
-	EsLider := false
-	idLider := -1
+	//indice := -1
+	//mandato := -1
+	//EsLider := false
+	//idLider := -1
 	valorADevolver := ""
 
 	// Si el nodo no es el lider, devolver falso
 	if nr.IdLider != nr.Yo {
-		return indice, nr.currentTerm, false, nr.IdLider, valorADevolver
+		return -1, nr.currentTerm, false, nr.IdLider, valorADevolver
 	}
 
 	//si eres lider
@@ -364,13 +372,16 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 	reply := Results{}
 	for i := range nr.Nodos {
 		if i != nr.Yo {
-			entries := nr.log[:(nr.nextIndex[i] - 1)]
-			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.commitIndex - 1, nr.log[nr.commitIndex-1].Indice, entries, nr.commitIndex}
+			entries := nr.log[(nr.nextIndex[i]):(nr.commitIndex + 1)]
+			fmt.Println("nextIndex: ", nr.nextIndex[i])
+			fmt.Println("Vamos a enviar:", entries)
+			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[i] - 1, nr.log[nr.nextIndex[i]-1].Indice, entries, nr.commitIndex}
 			go nr.enviarAppendEntries(i, &args, &reply)
 		}
 	}
 
-	return indice, nr.currentTerm, true, nr.IdLider, valorADevolver
+	fmt.Println("someter operacion ", nr.Yo)
+	return nr.commitIndex, nr.currentTerm, true, nr.IdLider, valorADevolver
 }
 
 // -----------------------------------------------------------------------
@@ -506,22 +517,37 @@ func (nr *NodoRaft) AppendEntries(args *ArgAppendEntries,
 
 	switch {
 	case args.Term < nr.currentTerm:
+		fmt.Println(nr.Yo, ". AppendEntries -> args.Term < nr.currentTerm")
 		results.Term = nr.currentTerm
 		results.Success = false
 	case args.Term >= nr.currentTerm:
+		fmt.Println(nr.Yo, ". AppendEntries -> args.Term >= nr.currentTerm")
 		nr.currentTerm = args.Term
 		nr.IdLider = args.LeaderId
-		results.Success = true
+		//results.Success = true
 
 		nr.chReinicioTimeout <- true
-	case nr.log[args.PrevLogIndex].Indice != args.Entries[args.PrevLogIndex].Indice: //prevlogindex igual no
-		results.Success = false
-	case nr.log[args.PrevLogIndex].Indice == args.Entries[args.PrevLogIndex].Indice:
-		//copiar entries desde prevlogindex, que igual no es es prevlogindex
-		results.Success = true
-	case args.LeaderCommit > nr.commitIndex:
-		//nr.commitIndex = math.Min()
+
+		if len(args.Entries) > 0 {
+			switch {
+			case nr.log[args.PrevLogIndex].Indice != args.PrevLogTerm: //prevlogindex igual no
+				fmt.Println(nr.Yo, ".  nr.log[args.PrevLogIndex].Indice != args.PrevLogTerm")
+				results.Success = false
+			case nr.log[args.PrevLogIndex].Indice == args.PrevLogTerm:
+				fmt.Println(nr.Yo, ".  nr.log[args.PrevLogIndex].Indice == args.PrevLogTerm")
+				//copiar entries desde prevlogindex, que igual no es es prevlogindex
+				for i := 0; i < len(args.Entries); i++ {
+					nr.log[args.PrevLogIndex+1+i] = args.Entries[i]
+				}
+				results.Success = true
+				fmt.Println(nr.Yo, ". He hecho commit en log: ", nr.log)
+			case args.LeaderCommit > nr.commitIndex:
+				//nr.commitIndex = math.Min()
+			}
+		}
+
 	}
+
 	return nil
 }
 
