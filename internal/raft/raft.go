@@ -156,7 +156,8 @@ func NuevoNodo(nodos []rpctimeout.HostPort, yo int,
 
 	nr.chReinicioTimeout = make(chan bool)
 	nr.chGotVote = make(chan bool)
-	nr.log = make([]AplicaOperacion, 10)
+	//nr.log = make([]AplicaOperacion, 10)
+	nr.log = []AplicaOperacion{}
 	nr.nextIndex = make([]int, len(nr.Nodos))
 
 	go gestionNodo(nr)
@@ -255,14 +256,17 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 				fmt.Println(nr.Yo, ". No se ha conseguido replicar entrada a", nodo)
 
 				nr.nextIndex[nodo]--
-				entries := nr.log[(nr.nextIndex[nodo]):(nr.commitIndex + 1)]
-				args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[nodo] - 1, nr.log[nr.nextIndex[nodo]-1].Indice, entries, nr.commitIndex}
+				//entries := nr.log[(nr.nextIndex[nodo]):(nr.commitIndex + 1)]
+				entries := nr.log[(nr.nextIndex[nodo]):(nr.nextIndex[nr.Yo])]
+				args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[nodo] - 1, nr.log[nr.nextIndex[nodo]-1].Indice, entries, nr.commitIndex, args.chCommit}
 				rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.AppendEntries", args, reply, timeout)
 
 			case reply.Success && len(args.Entries) > 0:
 				//Update nextIndex and matchIndex
-				nr.nextIndex[nodo] = nr.commitIndex + 1
+				//nr.nextIndex[nodo] = nr.commitIndex + 1
+				nr.nextIndex[nodo] = nr.nextIndex[nr.Yo]
 				exit = true
+				args.chCommit <- true
 			default:
 				fmt.Println(nr.Yo, ". Default enviarAppendEntries")
 				//os.Exit(1)
@@ -287,7 +291,7 @@ func leader(nr *NodoRaft) {
 	go func() {
 		for nr.IdLider == nr.Yo {
 			var entries []AplicaOperacion
-			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.lastApplied, nr.log[nr.lastApplied].Indice, entries, nr.commitIndex}
+			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.lastApplied, nr.log[nr.lastApplied].Indice, entries, nr.commitIndex, make(chan bool, 1)}
 			reply := Results{}
 			for i := range nr.Nodos {
 				if i != nr.Yo {
@@ -365,20 +369,32 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 
 	//si eres lider
 	//Meter nosostros en el log
-	nr.commitIndex = nr.commitIndex + 1
-	nr.log[nr.commitIndex].Operacion = operacion
-	nr.log[nr.commitIndex].Indice = nr.currentTerm
+	/*
+		nr.commitIndex = nr.commitIndex + 1
+		nr.log[nr.commitIndex].Operacion = operacion
+		nr.log[nr.commitIndex].Indice = nr.currentTerm*/
+
+	nr.log[nr.nextIndex[nr.Yo]].Operacion = operacion
+	nr.log[nr.nextIndex[nr.Yo]].Indice = nr.currentTerm
+	nr.nextIndex[nr.Yo]++
+
+	chCommit := make(chan bool, 1)
 
 	reply := Results{}
 	for i := range nr.Nodos {
 		if i != nr.Yo {
-			entries := nr.log[(nr.nextIndex[i]):(nr.commitIndex + 1)]
+			entries := nr.log[(nr.nextIndex[i]):(nr.nextIndex[nr.Yo])]
 			fmt.Println("nextIndex: ", nr.nextIndex[i])
 			fmt.Println("Vamos a enviar:", entries)
-			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[i] - 1, nr.log[nr.nextIndex[i]-1].Indice, entries, nr.commitIndex}
+			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[i] - 1, nr.log[nr.nextIndex[i]-1].Indice, entries, nr.commitIndex, chCommit}
 			go nr.enviarAppendEntries(i, &args, &reply)
 		}
 	}
+
+	for i := 0; i < (len(nr.Nodos)-1)/2; i++ {
+		<-chCommit
+	}
+	nr.commitIndex = nr.commitIndex + 1
 
 	fmt.Println("someter operacion ", nr.Yo)
 	return nr.commitIndex, nr.currentTerm, true, nr.IdLider, valorADevolver
@@ -476,7 +492,16 @@ func (nr *NodoRaft) PedirVoto(peticion *ArgsPeticionVoto,
 		//Votas si eres retrasado??
 		//step down if leader or candidate
 		nr.chReinicioTimeout <- true
-	} else if (peticion.Term == nr.currentTerm) && (nr.votedFor == 0 || nr.votedFor == peticion.CandidateId) && (nr.commitIndex == peticion.LastLogIndex) {
+	} else if peticion.Term == nr.currentTerm && nr.votedFor == 0 && (nr.commitIndex == peticion.LastLogIndex) {
+		/*
+					Raft determines which of two logs is more up-to-date
+			by comparing the index and term of the last entries in the
+			logs. If the logs have last entries with different terms, then
+			the log with the later term is more up-to-date. If the logs
+			end with the same term, then whichever log is longer is
+			more up-to-date.
+			peticion.LastLogIndex*/
+		//(peticion.Term == nr.currentTerm) && (nr.votedFor == 0 || nr.votedFor == peticion.CandidateId) && (nr.commitIndex == peticion.LastLogIndex)
 		//Y se le estas preguntando al lider??
 		fmt.Println("he votado a", peticion.CandidateId)
 		nr.votedFor = peticion.CandidateId
@@ -501,6 +526,8 @@ type ArgAppendEntries struct {
 	Entries     []AplicaOperacion
 
 	LeaderCommit int
+
+	chCommit chan bool
 }
 
 type Results struct {
@@ -541,11 +568,16 @@ func (nr *NodoRaft) AppendEntries(args *ArgAppendEntries,
 				}
 				results.Success = true
 				fmt.Println(nr.Yo, ". He hecho commit en log: ", nr.log)
-			case args.LeaderCommit > nr.commitIndex:
-				//nr.commitIndex = math.Min()
+
 			}
 		}
 
+	}
+
+	if args.LeaderCommit > nr.commitIndex {
+		/*fmt.Println("Longitud log: ", len(nr.log))
+		if args.LeaderCommit <
+		//nr.commitIndex = math.Min(args.LeaderCommit, )*/
 	}
 
 	return nil
