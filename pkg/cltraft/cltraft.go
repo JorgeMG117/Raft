@@ -58,7 +58,7 @@ func Client(endPoint string) {
 			log.Fatal("dialing:", err)
 		}*/
 
-		operacion := TipoOperacion{"leer", "a", ""}
+		operacion := TipoOperacion{"leer", "b", ""}
 		var reply ResultadoRemoto
 		//err = client.Call("raft.SometerOperacionRaft", operacion, &reply)
 		err := rpctimeout.HostPort.CallTimeout(rpctimeout.HostPort(endPoint), "NodoRaft.SometerOperacionRaft", operacion, &reply, 5*time.Second)

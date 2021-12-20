@@ -10,7 +10,6 @@ import (
 	"raft/internal/comun/check"
 	"raft/internal/comun/rpctimeout"
 	"raft/internal/raft"
-	"raft/pkg/cltraft"
 	"strconv"
 	//"time"
 )
@@ -36,7 +35,7 @@ func main() {
 	l, err := net.Listen("tcp", os.Args[2:][me])
 	check.CheckError(err, "Main listen error:")
 
-	go cltraft.Client(os.Args[2:][me])
+	//go cltraft.Client(os.Args[2:][me])
 
 	rpc.Accept(l)
 }

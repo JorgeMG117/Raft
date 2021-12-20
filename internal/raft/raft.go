@@ -88,8 +88,8 @@ type NodoRaft struct {
 	votedFor    int
 	logIndex    int
 
-	nextIndex  []int
-	matchIndex []int
+	nextIndex []int
+	//matchIndex []int
 
 	chReinicioTimeout chan bool
 	chGotVote         chan bool
@@ -148,8 +148,9 @@ func NuevoNodo(nodos []rpctimeout.HostPort, yo int,
 	}
 
 	// Añadir codigo de inicialización
-	nr.currentTerm = 0
+
 	nr.electionTimeout = time.Millisecond*10000*(time.Duration(nr.Yo)+1) + time.Millisecond*time.Duration(nr.Yo)*10000
+	nr.currentTerm = 0
 	nr.votedFor = -1
 
 	nr.lastApplied = 0
@@ -160,7 +161,7 @@ func NuevoNodo(nodos []rpctimeout.HostPort, yo int,
 	nr.log = make([]AplicaOperacion, 10)
 	//nr.log = []AplicaOperacion{}
 	nr.nextIndex = make([]int, len(nr.Nodos))
-	nr.matchIndex = make([]int, len(nr.Nodos))
+	//nr.matchIndex = make([]int, len(nr.Nodos))
 
 	nr.logIndex = 0
 
@@ -229,7 +230,7 @@ func candidate(nr *NodoRaft) {
 		case <-nr.chReinicioTimeout:
 			//fmt.Println(nr.Yo, ". Me ha llegado chReinicioTimeout")
 			out = true
-		case <-time.After(nr.electionTimeout * 10000):
+		case <-time.After(nr.electionTimeout * 10000): //rand.Intn(20-2) + 2
 			//fmt.Println(nr.Yo, ". No se ha resuelto la eleccion, electionTimeout")
 			//Reiniciar funcion
 			candidate(nr)
@@ -253,7 +254,7 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 				exit = true
 				//return false
 			case err != nil:
-				fmt.Println(nr.Yo, ". Error Append Entries")
+				//fmt.Println(nr.Yo, ". Error Append Entries")
 				time.Sleep(1 * time.Second)
 				err = rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.AppendEntries", args, reply, timeout)
 
@@ -271,12 +272,12 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 				//Update nextIndex and matchIndex
 				//nr.nextIndex[nodo] = nr.commitIndex + 1
 				nr.nextIndex[nodo] = nr.logIndex + 1
-				nr.matchIndex[nodo] = nr.logIndex
+				//nr.matchIndex[nodo] = nr.logIndex
 				fmt.Println(nr.Yo, ". Se ha conseguido replicar entrada a", nodo, "nr.nextIndex[nodo]: ", nr.nextIndex[nodo])
 				exit = true
 				args.chCommit <- true
 			default:
-				fmt.Println(nr.Yo, ". Default enviarAppendEntries")
+				//fmt.Println(nr.Yo, ". Default enviarAppendEntries")
 				//os.Exit(1)
 				exit = true
 			}
@@ -301,19 +302,19 @@ func leader(nr *NodoRaft) {
 			var entries []AplicaOperacion
 			for i := range nr.Nodos {
 				if i != nr.Yo {
-					args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.lastApplied, nr.log[nr.lastApplied].Indice, entries, nr.commitIndex, make(chan bool, 1)}
+					args := ArgAppendEntries{nr.currentTerm, nr.Yo, 0, 0, entries, nr.commitIndex, make(chan bool, 1)}
 					reply := Results{}
 					go nr.enviarAppendEntries(i, &args, &reply)
 				}
 			}
-			time.Sleep(nr.electionTimeout)
+			time.Sleep(nr.electionTimeout) //3*time.Second
 
 		}
 	}()
 
 	for i := range nr.Nodos {
 		nr.nextIndex[i] = nr.logIndex + 1
-		nr.matchIndex[i] = 0
+		//nr.matchIndex[i] = 0
 	}
 
 	<-nr.chReinicioTimeout
@@ -384,6 +385,7 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 		nr.log[nr.commitIndex].Indice = nr.currentTerm*/
 
 	nr.logIndex++
+	indiceAux := nr.logIndex
 	nr.log[nr.logIndex].Operacion = operacion
 	nr.log[nr.logIndex].Indice = nr.currentTerm
 
@@ -404,9 +406,12 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 	for i := 0; i < (len(nr.Nodos)-1)/2; i++ {
 		<-chCommit
 	}
-	nr.commitIndex = nr.commitIndex + 1
+	if nr.log[indiceAux].Indice == nr.currentTerm {
+		fmt.Println(nr.Yo, ". Ya es seguro hacer commit, commitIndex =", indiceAux)
+		nr.commitIndex = indiceAux
+	}
 
-	mayoria := 0
+	/*mayoria := 0
 	for n := 0; n < 9; n++ {
 		if n > nr.commitIndex {
 			for i := 0; i < len(nr.Nodos); i++ {
@@ -425,8 +430,13 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 		}
 	}
 
+	indice := 0
+	if indice > nr.commitIndex {
+
+	}*/
+
 	//fmt.Println("someter operacion ", nr.Yo)
-	return nr.commitIndex, nr.currentTerm, true, nr.IdLider, valorADevolver //Ojo con lo que devuelve nr.commitIndex
+	return indiceAux, nr.currentTerm, true, nr.IdLider, valorADevolver //Ojo con lo que devuelve nr.commitIndex
 }
 
 // -----------------------------------------------------------------------
@@ -438,6 +448,15 @@ type Vacio struct{}
 func (nr *NodoRaft) ParaNodo(args Vacio, reply *Vacio) error {
 	defer nr.para()
 	return nil
+}
+
+func (nr *NodoRaft) Comited(args Vacio, reply *int) error {
+	nr.comited(reply)
+	return nil
+}
+
+func (nr *NodoRaft) comited(reply *int) {
+	*reply = nr.commitIndex
 }
 
 type EstadoParcial struct {
@@ -519,6 +538,8 @@ func (nr *NodoRaft) PedirVoto(peticion *ArgsPeticionVoto,
 			//Reiniciar votedFor
 			nr.votedFor = -1
 			nr.currentTerm = peticion.Term
+
+			nr.IdLider = -1
 		}
 
 		if nr.votedFor == -1 &&
@@ -557,15 +578,15 @@ type Results struct {
 func (nr *NodoRaft) AppendEntries(args *ArgAppendEntries,
 	results *Results) error {
 	// Completar....
-	fmt.Println(nr.Yo, ". Me ha llegado AppendEntries de", args.LeaderId)
+	//fmt.Println(nr.Yo, ". Me ha llegado AppendEntries de", args.LeaderId)
 
 	switch {
 	case args.Term < nr.currentTerm:
-		fmt.Println(nr.Yo, ". AppendEntries -> args.Term < nr.currentTerm")
+		//fmt.Println(nr.Yo, ". AppendEntries -> args.Term < nr.currentTerm")
 		results.Term = nr.currentTerm
 		//results.Success = false
 	case args.Term >= nr.currentTerm:
-		fmt.Println(nr.Yo, ". AppendEntries -> args.Term >= nr.currentTerm")
+		//fmt.Println(nr.Yo, ". AppendEntries -> args.Term >= nr.currentTerm")
 		if args.Term > nr.currentTerm {
 			//Reiniciar votedFor
 			nr.votedFor = -1
@@ -578,10 +599,10 @@ func (nr *NodoRaft) AppendEntries(args *ArgAppendEntries,
 		if len(args.Entries) > 0 {
 			switch {
 			case nr.log[args.PrevLogIndex].Indice != args.PrevLogTerm: //prevlogindex igual no
-				fmt.Println(nr.Yo, ".  nr.log[args.PrevLogIndex].Indice != args.PrevLogTerm")
+				//fmt.Println(nr.Yo, ".  nr.log[args.PrevLogIndex].Indice != args.PrevLogTerm")
 				results.Success = false
 			case nr.log[args.PrevLogIndex].Indice == args.PrevLogTerm:
-				fmt.Println(nr.Yo, ".  nr.log[args.PrevLogIndex].Indice == args.PrevLogTerm")
+				//fmt.Println(nr.Yo, ".  nr.log[args.PrevLogIndex].Indice == args.PrevLogTerm")
 				//copiar entries desde prevlogindex, que igual no es es prevlogindex
 				i := 0
 				for ; i < len(args.Entries); i++ {
@@ -599,15 +620,15 @@ func (nr *NodoRaft) AppendEntries(args *ArgAppendEntries,
 	}
 
 	if args.LeaderCommit > nr.commitIndex {
-		fmt.Println(nr.Yo, "LeaderCommit: ", args.LeaderCommit)
-		fmt.Println(nr.Yo, "CommitIndex: ", nr.commitIndex)
-		fmt.Println(nr.Yo, "LogIndex: ", nr.logIndex)
 
 		if args.LeaderCommit < nr.logIndex {
 			nr.commitIndex = args.LeaderCommit
 		} else {
 			nr.commitIndex = nr.logIndex
 		}
+		fmt.Println(nr.Yo, "LeaderCommit: ", args.LeaderCommit)
+		fmt.Println(nr.Yo, "CommitIndex: ", nr.commitIndex)
+		fmt.Println(nr.Yo, "LogIndex: ", nr.logIndex)
 	}
 
 	return nil
