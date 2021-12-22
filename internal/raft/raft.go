@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"os"
 
 	//"crypto/rand"
@@ -149,7 +150,10 @@ func NuevoNodo(nodos []rpctimeout.HostPort, yo int,
 
 	// Añadir codigo de inicialización
 
-	nr.electionTimeout = time.Millisecond*10000*(time.Duration(nr.Yo)+1) + time.Millisecond*time.Duration(nr.Yo)*10000
+	//nr.electionTimeout = time.Millisecond*10000*(time.Duration(nr.Yo)+1) + time.Millisecond*time.Duration(nr.Yo)*10000
+	rand.Seed(int64(nr.Yo))
+	nr.electionTimeout = time.Millisecond * time.Duration(rand.Intn(500)+1000)
+	fmt.Println(nr.Yo, "Election timeout:", nr.electionTimeout)
 	nr.currentTerm = 0
 	nr.votedFor = -1
 
@@ -190,7 +194,7 @@ func follower(nr *NodoRaft) {
 	select {
 	case <-nr.chReinicioTimeout: //Nos llega un rpc
 		//fmt.Println(nr.Yo, ". Me ha llegado un rpc")
-	case <-time.After(nr.electionTimeout + 2*time.Second):
+	case <-time.After(nr.electionTimeout):
 		//fmt.Println(nr.Yo, " yo voy a ser candidato")
 		//Pasas a candidato
 		candidate(nr)
@@ -230,7 +234,7 @@ func candidate(nr *NodoRaft) {
 		case <-nr.chReinicioTimeout:
 			//fmt.Println(nr.Yo, ". Me ha llegado chReinicioTimeout")
 			out = true
-		case <-time.After(nr.electionTimeout * 10000): //rand.Intn(20-2) + 2
+		case <-time.After(1100 * time.Millisecond): //rand.Intn(20-2) + 2
 			//fmt.Println(nr.Yo, ". No se ha resuelto la eleccion, electionTimeout")
 			//Reiniciar funcion
 			candidate(nr)
@@ -248,6 +252,8 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 	go func() {
 		for !exit {
 			switch {
+			/*case nr.currentTerm > args.Term || nr.commitIndex > args.LeaderCommit:
+			exit = true*/
 			case reply.Term > nr.currentTerm:
 				nr.IdLider = -1
 				nr.chReinicioTimeout <- true
@@ -307,7 +313,7 @@ func leader(nr *NodoRaft) {
 					go nr.enviarAppendEntries(i, &args, &reply)
 				}
 			}
-			time.Sleep(nr.electionTimeout) //3*time.Second
+			time.Sleep(50 * time.Millisecond)
 
 		}
 	}()
@@ -669,7 +675,7 @@ func (nr *NodoRaft) enviarPeticionVoto(nodo int, args *ArgsPeticionVoto,
 	reply *RespuestaPeticionVoto) bool {
 
 	// Completar....
-	timeout := time.Duration(1000000 * 10000)
+	timeout := time.Duration(500 * time.Millisecond)
 	//fmt.Println(nr.Yo, ". voy a pedir votos a ", nodo)
 
 	err := rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.PedirVoto", args, reply, timeout)
@@ -677,11 +683,13 @@ func (nr *NodoRaft) enviarPeticionVoto(nodo int, args *ArgsPeticionVoto,
 	//check.CheckError(err, "Error Pedir Voto")
 	for {
 		switch {
+		case nr.IdLider == nr.Yo:
+			return true
 		case args.Term != nr.currentTerm: //Ya no eres candidato, estamos en otro term
 			//fmt.Println(nr.Yo, " .No soy candidato")
 			return true
 		case err != nil:
-			//fmt.Println(nr.Yo, ". otro try candidato, Error Pedir Voto")
+			fmt.Println(nr.Yo, ". otro try candidato, Error Pedir Voto a ", nodo)
 			//Habria que deja tiempo para que no spameara????
 			time.Sleep(1 * time.Second)
 			err = rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.PedirVoto", args, reply, timeout)

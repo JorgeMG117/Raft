@@ -212,6 +212,7 @@ func (cfg *configDespliegue) falloAnteriorElegirNuevoLiderTest3(t *testing.T) {
 	lider := cfg.pruebaUnLider(3)
 
 	// Desconectar lider
+	fmt.Printf("Desconectar lider: %d\n", lider)
 	cfg.desconectarLider(lider)
 
 	fmt.Printf("Comprobar nuevo lider\n")
@@ -330,7 +331,7 @@ func (cfg *configDespliegue) desconectarLider(lider int) {
 		raft.Vacio{}, &reply, 100*time.Millisecond)
 	check.CheckError(err, "Error en llamada RPC Para nodo")
 
-	cfg.conectados[0] = false
+	cfg.conectados[lider] = false
 	//time.Sleep(15 * time.Second)
 }
 
@@ -359,7 +360,6 @@ func (cfg *configDespliegue) pruebaUnLider(numreplicas int) int {
 		mapaLideres := make(map[int][]int)
 		for i := 0; i < numreplicas; i++ {
 			if cfg.conectados[i] {
-				fmt.Println(i, "la i")
 				if _, mandato, eslider, _ := cfg.obtenerEstadoRemoto(i); eslider {
 					mapaLideres[mandato] = append(mapaLideres[mandato], i)
 				}
