@@ -192,7 +192,8 @@ func (cfg *configDespliegue) elegirPrimerLiderTest2(t *testing.T) {
 
 	// Se ha elegido lider ?
 	fmt.Printf("Probando lider en curso\n")
-	cfg.pruebaUnLider(3)
+	lider := cfg.pruebaUnLider(3)
+	fmt.Println("El lider es", lider)
 
 	// Parar réplicas alamcenamiento en remoto
 	cfg.stopDistributedProcesses() // Parametros
@@ -216,9 +217,12 @@ func (cfg *configDespliegue) falloAnteriorElegirNuevoLiderTest3(t *testing.T) {
 	cfg.desconectarLider(lider)
 
 	fmt.Printf("Comprobar nuevo lider\n")
-	cfg.pruebaUnLider(3)
+	segLider := cfg.pruebaUnLider(3)
+	fmt.Printf("Nuevo lider: %d\n", segLider)
 
 	cfg.startDistributedProcess(lider)
+
+	time.Sleep(1 * time.Second)
 
 	// Parar réplicas almacenamiento en remoto
 	cfg.stopDistributedProcesses() //parametros
@@ -228,49 +232,25 @@ func (cfg *configDespliegue) falloAnteriorElegirNuevoLiderTest3(t *testing.T) {
 
 // 3 operaciones comprometidas con situacion estable y sin fallos - 3 NODOS RAFT
 func (cfg *configDespliegue) tresOperacionesComprometidasEstable(t *testing.T) {
-	//t.Skip("SKIPPED tresOperacionesComprometidasEstable")
+	t.Skip("SKIPPED tresOperacionesComprometidasEstable")
 
 	fmt.Println(t.Name(), ".....................")
 
 	cfg.startDistributedProcesses()
 
 	lider := cfg.pruebaUnLider(3)
-
-	/*type ResultadoRemoto struct {
-		ValorADevolver string
-		IndiceRegistro int
-		Mandato int
-		EsLider bool
-		IdLider int
-	}
-
-
-			}
-
-		type TipoOperacion struct {
-			Operacion string // La operaciones posibles son "leer" y "escribir"
-			Clave     string
-			Valor     string // en el caso de la lectura Valor = ""
-		}*/
+	fmt.Println("El lider es", lider)
+	var indice int
 	for i := 0; i < 3; i++ {
-		var reply raft.ResultadoRemoto
-		operacion := raft.TipoOperacion{Operacion: "leer", Clave: strconv.Itoa(i), Valor: ""}
-		err := cfg.nodosRaft[lider].CallTimeout("NodoRaft.SometerOperacionRaft",
-			operacion, &reply, 10*time.Millisecond)
-		check.CheckError(err, "Error en llamada RPC Para nodo")
-
-		//time.Sleep(5 * time.Second)
+		indice = cfg.comprometerUnaEntrada(lider, "leer", strconv.Itoa(i), "")
+		time.Sleep(1 * time.Second)
 	}
 
-	var reply int
-	err := cfg.nodosRaft[lider].CallTimeout("NodoRaft.Comited",
-		raft.Vacio{}, &reply, 10*time.Millisecond)
-	check.CheckError(err, "Error en llamada RPC Para nodo")
-	fmt.Println(reply)
-
-	//comprobar comprometidas
-	//añadir funcion al raft rpc que devuelva el lastapplied o lo q sea q nos indica comprometidos
-
+	if cfg.comprobarEntradaComprometida(lider, indice) {
+		fmt.Printf("Correcto: Hay %d entradas comprometidas\n", indice)
+	} else {
+		fmt.Printf("Entrada no comprometida\n")
+	}
 	cfg.stopDistributedProcesses()
 
 	fmt.Println(".............", t.Name(), "Superado")
@@ -281,29 +261,104 @@ func (cfg *configDespliegue) AcuerdoApesarDeSeguidor(t *testing.T) {
 	t.Skip("SKIPPED AcuerdoApesarDeSeguidor")
 
 	// A completar ???
+	fmt.Println(t.Name(), ".....................")
+
+	cfg.startDistributedProcesses()
 
 	// Comprometer una entrada
+	//time.Sleep(10 * time.Second)
+	fmt.Printf("Comprometiendo una entrada: 0, leer, nueva\n")
+	indice := cfg.comprometerUnaEntrada(0, "leer", "nueva", "")
+	time.Sleep(5 * time.Second)
+	if cfg.comprobarEntradaComprometida(2, indice) {
+		fmt.Printf("Entrada comprometida correctamente\n")
+	} else {
+		fmt.Printf("Entrada no comprometida\n")
+	}
 
 	//  Obtener un lider y, a continuación desconectar una de los nodos Raft
+	lider := cfg.pruebaUnLider(3)
+	fmt.Printf("Lider inicial: %d\n", lider)
+	seguidor := cfg.desconectarSeguidor(lider, 3)
 
 	// Comprobar varios acuerdos con una réplica desconectada
+	for i := 0; i < 3; i++ {
+		fmt.Printf("Comprometiendo una entrada: 0, leer, nueva\n")
+		indice = cfg.comprometerUnaEntrada(lider, "escribir", "nueva", strconv.Itoa(i))
+		time.Sleep(3 * time.Second)
+		if cfg.comprobarEntradaComprometida(lider, indice) {
+			fmt.Printf("Entrada comprometida correctamente\n")
+		}
+	}
 
 	// reconectar nodo Raft previamente desconectado y comprobar varios acuerdos
+	cfg.startDistributedProcess(seguidor)
+	time.Sleep(10 * time.Second)
+	//seguidor = 2
+	fmt.Printf("Vamos a comprobar las entradas comprometidas del nodo: %d\n", seguidor)
+	if cfg.comprobarEntradaComprometida(seguidor, indice) {
+		fmt.Printf("Correcto: Hay %d entradas comprometidas\n", indice)
+	} else {
+		fmt.Printf("Entrada no comprometida\n")
+	}
+
+	// Parar réplicas almacenamiento en remoto
+	cfg.stopDistributedProcesses()
+
+	fmt.Println(".............", t.Name(), "Superado")
+
 }
 
 // NO se consigue acuerdo al desconectarse mayoría de seguidores -- 3 NODOS RAFT
 func (cfg *configDespliegue) SinAcuerdoPorFallos(t *testing.T) {
-	t.Skip("SKIPPED SinAcuerdoPorFallos")
+	//t.Skip("SKIPPED SinAcuerdoPorFallos")
 
 	// A completar ???
+	fmt.Println(t.Name(), ".....................")
+
+	cfg.startDistributedProcesses()
 
 	// Comprometer una entrada
+	cfg.comprometerUnaEntrada(0, "escribir", "nueva", "afjsl")
 
 	//  Obtener un lider y, a continuación desconectar 2 de los nodos Raft
+	lider := cfg.pruebaUnLider(3)
+	fmt.Printf("Lider inicial: %d\n", lider)
+	seguidor := cfg.desconectarSeguidor(lider, 3)
+	seguidor2 := cfg.desconectarSeguidor(lider, 3)
 
 	// Comprobar varios acuerdos con 2 réplicas desconectada
+	time.Sleep(3 * time.Second)
+	i := 0
+	for i = 0; i < 3; i++ {
+		indice := cfg.comprometerUnaEntrada(lider, "escribir", "nueva", strconv.Itoa(i))
+		if cfg.comprobarEntradaComprometida(lider, indice) {
+			fmt.Printf("Correcto: Hay %d entradas comprometidas\n", indice)
+		} else {
+			fmt.Printf("Falso: No hay %d entradas comprometidas\n", indice)
+		}
+	}
 
 	// reconectar lo2 nodos Raft  desconectados y probar varios acuerdos
+	fmt.Printf("Reconectando nodo: %d\n", seguidor)
+	cfg.startDistributedProcess(seguidor)
+	fmt.Printf("Reconectando nodo: %d\n", seguidor2)
+	cfg.startDistributedProcess(seguidor2)
+	//time.Sleep(30 * time.Second)
+	if cfg.comprobarEntradaComprometida(seguidor, i+1) {
+		fmt.Printf("Correcto: Hay %d entradas comprometidas\n", i+1)
+	} else {
+		fmt.Printf("Falso: No hay %d entradas comprometidas\n", i+1)
+	}
+	if cfg.comprobarEntradaComprometida(seguidor2, i+1) {
+		fmt.Printf("Correcto: Hay %d entradas comprometidas\n", i+1)
+	} else {
+		fmt.Printf("Falso: No hay %d entradas comprometidas\n", i+1)
+	}
+
+	cfg.stopDistributedProcesses()
+
+	fmt.Println(".............", t.Name(), "Superado")
 }
 
 // Se somete 5 operaciones de forma concurrente -- 3 NODOS RAFT
@@ -311,19 +366,109 @@ func (cfg *configDespliegue) SometerConcurrentementeOperaciones(t *testing.T) {
 	t.Skip("SKIPPED SometerConcurrentementeOperaciones")
 
 	// A completar ???
+	fmt.Println(t.Name(), ".....................")
+
+	cfg.startDistributedProcesses()
 
 	// un bucle para estabilizar la ejecucion
+	time.Sleep(10 * time.Second)
 
 	// Obtener un lider y, a continuación someter una operacion
+	lider := cfg.pruebaUnLider(3)
+	cfg.comprometerUnaEntrada(lider, "escribir", "nueva", strconv.Itoa(0))
 
 	// Someter 5  operaciones concurrentes
+	for i := 0; i < 5; i++ {
+		go cfg.comprometerUnaEntrada(lider, "escribir", "nueva", strconv.Itoa(i+1))
+	}
 
 	// Comprobar estados de nodos Raft, sobre todo
 	// el avance del mandato en curso e indice de registro de cada uno
 	// que debe ser identico entre ellos
+	time.Sleep(15 * time.Second)
+	for i := range cfg.nodosRaft {
+		fmt.Printf("Nodo: %d\n", i)
+		if cfg.comprobarEntradaComprometida(i, 6) {
+			fmt.Printf("Correcto: Hay %d entradas comprometidas\n", 6)
+		} else {
+			fmt.Printf("Entrada no comprometida\n")
+		}
+	}
+
+	cfg.stopDistributedProcesses()
+
+	fmt.Println(".............", t.Name(), "Superado")
 }
 
 //Nuestras funciones
+func (cfg *configDespliegue) desconectarSeguidor(lider int, numNodos int) int {
+	//rand.Seed(int64(lider + numNodos))
+	//matar := rand.Intn(numNodos)
+	matar := 0
+	for i := 0; i < numNodos; i++ {
+		if (i != lider) && cfg.conectados[i] {
+			matar = i
+		}
+	}
+	/*for !cfg.conectados[matar] {
+		//fmt.Printf("Vamos ha desconectar nodo: %d\n", matar)
+		if matar == lider {
+			if lider == 0 {
+				matar++
+			} else {
+				matar--
+			}
+		} else {
+			matar = rand.Intn(numNodos)
+		}
+	}*/
+	var reply raft.Vacio
+
+	fmt.Printf("Desconectando seguidor: %d\n", matar)
+	err := cfg.nodosRaft[matar].CallTimeout("NodoRaft.ParaNodo",
+		raft.Vacio{}, &reply, 100*time.Millisecond)
+	check.CheckError(err, "Error en llamada RPC Para nodo")
+
+	cfg.conectados[matar] = false
+
+	return matar
+}
+
+func (cfg *configDespliegue) comprometerUnaEntrada(lider int, operacion string, clave string, valor string) int {
+	var reply raft.ResultadoRemoto
+	args := raft.TipoOperacion{Operacion: operacion, Clave: clave, Valor: valor}
+	//No sabemos quien es el lider, preguntamos a 0
+	err := cfg.nodosRaft[lider].CallTimeout("NodoRaft.SometerOperacionRaft",
+		args, &reply, 2*time.Second)
+	//check.CheckError(err, "Error en llamada RPC Para nodo")
+	for {
+		switch {
+		case err != nil:
+			fmt.Println("Error comprometer una entrada")
+			return -1
+		case !reply.EsLider:
+			fmt.Println("Redirigiendo comprometer una entrada a nodo", reply.IdLider)
+			err = cfg.nodosRaft[reply.IdLider].CallTimeout("NodoRaft.SometerOperacionRaft",
+				args, &reply, 1*time.Second)
+			//check.CheckError(err, "Error en llamada RPC Para nodo")
+			lider = reply.IdLider
+		case reply.EsLider:
+			fmt.Printf("El nodo %d ha sometido la operacion\n", lider)
+			return reply.IndiceRegistro
+		}
+	}
+}
+
+func (cfg *configDespliegue) comprobarEntradaComprometida(nodo int, indice int) bool {
+	var reply int
+	time.Sleep(1500 * time.Millisecond)
+	err := cfg.nodosRaft[nodo].CallTimeout("NodoRaft.Comited",
+		raft.Vacio{}, &reply, 1000*time.Millisecond)
+	check.CheckError(err, "Error en llamada RPC comprobarEntradaComprometida")
+	fmt.Printf("Indice: %d, Reply: %d", indice, reply)
+	return indice == reply
+}
+
 func (cfg *configDespliegue) desconectarLider(lider int) {
 	var reply raft.Vacio
 
@@ -345,9 +490,9 @@ func (cfg *configDespliegue) startDistributedProcess(nodo int) {
 
 	// dar tiempo para se establezcan las replicas
 	//time.Sleep(500 * time.Millisecond)
+	cfg.conectados[nodo] = true
 
-	// aproximadamente 500 ms para cada arranque por ssh en portatil
-	time.Sleep(2500 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 }
 
 // --------------------------------------------------------------------------
@@ -356,7 +501,7 @@ func (cfg *configDespliegue) startDistributedProcess(nodo int) {
 // probar varias veces si se necesitan reelecciones
 func (cfg *configDespliegue) pruebaUnLider(numreplicas int) int {
 	for iters := 0; iters < 10; iters++ {
-		time.Sleep(15000 * time.Millisecond) //antes eran 500 ms
+		time.Sleep(1500 * time.Millisecond) //antes eran 500 ms
 		mapaLideres := make(map[int][]int)
 		for i := 0; i < numreplicas; i++ {
 			if cfg.conectados[i] {

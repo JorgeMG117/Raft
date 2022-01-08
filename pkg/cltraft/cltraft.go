@@ -2,7 +2,6 @@ package cltraft
 
 import (
 	"fmt"
-	"log"
 	"raft/internal/comun/rpctimeout"
 	"time"
 )
@@ -63,7 +62,7 @@ func Client(endPoint string) {
 		//err = client.Call("raft.SometerOperacionRaft", operacion, &reply)
 		err := rpctimeout.HostPort.CallTimeout(rpctimeout.HostPort(endPoint), "NodoRaft.SometerOperacionRaft", operacion, &reply, 5*time.Second)
 		if err != nil {
-			log.Fatal("SometerOperacionRaft error:", err)
+			fmt.Println("SometerOperacionRaft error:", err)
 		}
 		fmt.Println("Reply", endPoint, ": ValorADevolver:", reply.ValorADevolver, "IndiceRegistro:", reply.IndiceRegistro, "Mandato:", reply.Mandato,
 			"EsLider", reply.EsLider, "IdLider", reply.IdLider)

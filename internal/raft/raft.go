@@ -89,13 +89,15 @@ type NodoRaft struct {
 	votedFor    int
 	logIndex    int
 
-	nextIndex []int
-	//matchIndex []int
+	nextIndex  []int
+	matchIndex []int
 
 	chReinicioTimeout chan bool
 	chGotVote         chan bool
 	//ch chan
 	electionTimeout time.Duration
+
+	maquinaDeEstados map[string]string
 
 	// mirar figura 2 para descripción del estado que debe mantenre un nodo Raft
 }
@@ -165,16 +167,19 @@ func NuevoNodo(nodos []rpctimeout.HostPort, yo int,
 	nr.log = make([]AplicaOperacion, 10)
 	//nr.log = []AplicaOperacion{}
 	nr.nextIndex = make([]int, len(nr.Nodos))
-	//nr.matchIndex = make([]int, len(nr.Nodos))
+	nr.matchIndex = make([]int, len(nr.Nodos))
 
 	nr.logIndex = 0
+	//nr.Mux.Unlock()
 
 	go gestionNodo(nr)
+	go actualizarMaquinaEstados(nr)
 
 	return nr
 }
 
 func gestionNodo(nr *NodoRaft) {
+	//time.Sleep(1 * time.Second)
 	for {
 		_, _, esLider, _ := nr.obtenerEstado()
 		switch esLider {
@@ -210,6 +215,7 @@ func candidate(nr *NodoRaft) {
 	//Vote itself
 	nr.votedFor = nr.Yo
 	numVotos := 1
+	fmt.Println(nr.Yo, "Me voto a mi mismo")
 
 	//Reset election timeout
 	args := ArgsPeticionVoto{nr.Yo, nr.currentTerm, nr.logIndex, nr.log[nr.logIndex].Indice}
@@ -223,20 +229,21 @@ func candidate(nr *NodoRaft) {
 	}
 
 	out := false
-	for nr.IdLider != nr.Yo || out {
+	for (nr.IdLider != nr.Yo) && !out {
 		select {
 		case <-nr.chGotVote:
 			//fmt.Println(nr.Yo, ". Me ha llegado un voto")
 			numVotos++
 			if numVotos > (len(nr.Nodos) / 2) {
 				nr.IdLider = nr.Yo
+				fmt.Println(nr.Yo, "Mayoria de votos conseguidos")
 			}
 		case <-nr.chReinicioTimeout:
 			//fmt.Println(nr.Yo, ". Me ha llegado chReinicioTimeout")
 			out = true
+			nr.electionTimeout = nr.electionTimeout + time.Duration(nr.Yo*20000000)
 		case <-time.After(1100 * time.Millisecond): //rand.Intn(20-2) + 2
-			//fmt.Println(nr.Yo, ". No se ha resuelto la eleccion, electionTimeout")
-			//Reiniciar funcion
+			fmt.Println(nr.Yo, ". No se ha resuelto la eleccion, vamos a reiniciarla")
 			candidate(nr)
 			out = true
 		}
@@ -245,7 +252,7 @@ func candidate(nr *NodoRaft) {
 
 func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply *Results) bool {
 
-	timeout := time.Duration(1000000 * 10000)
+	timeout := time.Duration(500 * time.Millisecond)
 	err := rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.AppendEntries", args, reply, timeout)
 	exit := false
 
@@ -255,13 +262,15 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 			/*case nr.currentTerm > args.Term || nr.commitIndex > args.LeaderCommit:
 			exit = true*/
 			case reply.Term > nr.currentTerm:
+				fmt.Println("Voy retrasado, mi term,", nr.currentTerm, "term de", nodo, ":", reply.Term, "en enviarAppendEntries")
 				nr.IdLider = -1
 				nr.chReinicioTimeout <- true
 				exit = true
 				//return false
 			case err != nil:
-				//fmt.Println(nr.Yo, ". Error Append Entries")
-				time.Sleep(1 * time.Second)
+				fmt.Println(nr.Yo, ". Error Append Entries", nodo, " ", err.Error())
+				//fmt.Fprintf(os.Stderr, "In: %s, Fatal error: %s", comment, err.Error())
+				time.Sleep(200 * time.Millisecond)
 				err = rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.AppendEntries", args, reply, timeout)
 
 			case !(reply.Success) && (len(args.Entries) > 0):
@@ -278,7 +287,7 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 				//Update nextIndex and matchIndex
 				//nr.nextIndex[nodo] = nr.commitIndex + 1
 				nr.nextIndex[nodo] = nr.logIndex + 1
-				//nr.matchIndex[nodo] = nr.logIndex
+				nr.matchIndex[nodo] = nr.logIndex
 				fmt.Println(nr.Yo, ". Se ha conseguido replicar entrada a", nodo, "nr.nextIndex[nodo]: ", nr.nextIndex[nodo])
 				exit = true
 				args.chCommit <- true
@@ -292,24 +301,26 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 
 	}()
 
-	<-time.After(nr.electionTimeout)
-	exit = true
+	//<-time.After(nr.electionTimeout)
+	//exit = true
 	return exit
 
 }
 
 func leader(nr *NodoRaft) {
-	fmt.Println("SOY LIDER ", nr.Yo)
+	fmt.Println("SOY LIDER ", nr.Yo, "Term:", nr.currentTerm, "Lider:", nr.IdLider)
 
 	//Enviar latidos
 	//mirar que seas lider, si te responden que no eres lider dedjas de serlo(comparar terms)
 	go func() {
+		fmt.Println("enviando latidos")
 		for nr.IdLider == nr.Yo {
 			var entries []AplicaOperacion
 			for i := range nr.Nodos {
 				if i != nr.Yo {
 					args := ArgAppendEntries{nr.currentTerm, nr.Yo, 0, 0, entries, nr.commitIndex, make(chan bool, 1)}
 					reply := Results{}
+					//fmt.Println("enviando latidos")
 					go nr.enviarAppendEntries(i, &args, &reply)
 				}
 			}
@@ -320,10 +331,13 @@ func leader(nr *NodoRaft) {
 
 	for i := range nr.Nodos {
 		nr.nextIndex[i] = nr.logIndex + 1
-		//nr.matchIndex[i] = 0
+		nr.matchIndex[i] = 0
 	}
 
+	go actualizarCommitIndex(nr)
+
 	<-nr.chReinicioTimeout
+	fmt.Println(nr.Yo, "Dejo de ser LIDER, Yo:", nr.Yo, "Lider:", nr.IdLider)
 	//Decirte a ti mismo que ya no eres lider??
 }
 
@@ -394,6 +408,7 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 	indiceAux := nr.logIndex
 	nr.log[nr.logIndex].Operacion = operacion
 	nr.log[nr.logIndex].Indice = nr.currentTerm
+	nr.matchIndex[nr.Yo] = nr.logIndex
 
 	chCommit := make(chan bool, 1)
 
@@ -405,6 +420,7 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 			fmt.Println("Vamos a enviar:", entries)
 			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[i] - 1, nr.log[nr.nextIndex[i]-1].Indice, entries, nr.commitIndex, chCommit}
 			reply := Results{}
+			fmt.Println("enviando op")
 			go nr.enviarAppendEntries(i, &args, &reply)
 		}
 	}
@@ -412,37 +428,60 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 	for i := 0; i < (len(nr.Nodos)-1)/2; i++ {
 		<-chCommit
 	}
-	if nr.log[indiceAux].Indice == nr.currentTerm {
+
+	/*if nr.log[indiceAux].Indice == nr.currentTerm {
 		fmt.Println(nr.Yo, ". Ya es seguro hacer commit, commitIndex =", indiceAux)
 		nr.commitIndex = indiceAux
-	}
-
-	/*mayoria := 0
-	for n := 0; n < 9; n++ {
-		if n > nr.commitIndex {
-			for i := 0; i < len(nr.Nodos); i++ {
-				if nr.matchIndex[i] >= n {
-					//ver si mayoria??
-					mayoria++
-				}
-			}
-
-			if (mayoria > (len(nr.Nodos)-1)/2) && (nr.log[n].Indice == nr.currentTerm) {
-				fmt.Println("Entramos a cambiar el commtIndex")
-				nr.commitIndex = n
-			}
-
-			mayoria = 0
-		}
-	}
-
-	indice := 0
-	if indice > nr.commitIndex {
-
 	}*/
 
 	//fmt.Println("someter operacion ", nr.Yo)
 	return indiceAux, nr.currentTerm, true, nr.IdLider, valorADevolver //Ojo con lo que devuelve nr.commitIndex
+}
+
+/*if there exists an N such that N > commitIndex, a majority
+of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+set commitIndex = N */
+
+func actualizarMaquinaEstados(nr *NodoRaft) {
+	for {
+		time.Sleep(100 * time.Millisecond)
+		if nr.commitIndex > nr.lastApplied {
+			nr.lastApplied++
+
+			if nr.log[nr.lastApplied].Operacion.Operacion == "leer" {
+				_ = nr.maquinaDeEstados[nr.log[nr.lastApplied].Operacion.Clave]
+			} else if nr.log[nr.lastApplied].Operacion.Operacion == "escribir" {
+				nr.maquinaDeEstados[nr.log[nr.lastApplied].Operacion.Clave] = nr.log[nr.lastApplied].Operacion.Valor
+			} else {
+				fmt.Println("Operacion no reconocida")
+			}
+		}
+	}
+}
+
+func actualizarCommitIndex(nr *NodoRaft) {
+	for nr.IdLider == nr.Yo {
+		nuevoCommitIndex := 0
+		for _, i := range nr.matchIndex {
+			estaReplicado := 0
+			if i > nr.commitIndex && i > nuevoCommitIndex && nr.log[i].Indice == nr.currentTerm {
+				//fmt.Println("vamos a ver si ", i, "es el nuevo commit index")
+				for _, j := range nr.matchIndex {
+					if i <= j {
+						estaReplicado++
+					}
+				}
+				if estaReplicado > (len(nr.Nodos)-1)/2 {
+					nuevoCommitIndex = i
+				}
+			}
+		}
+		if nuevoCommitIndex > 0 {
+			nr.commitIndex = nuevoCommitIndex
+			fmt.Println(nr.Yo, ". Nuevo commit index:", nr.commitIndex)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // -----------------------------------------------------------------------
@@ -478,7 +517,7 @@ type EstadoRemoto struct {
 
 func (nr *NodoRaft) ObtenerEstadoNodo(args Vacio, reply *EstadoRemoto) error {
 	reply.IdNodo, reply.Mandato, reply.EsLider, reply.IdLider = nr.obtenerEstado()
-	fmt.Println("Mi estado: ", reply.IdNodo, reply.Mandato, reply.EsLider, reply.IdLider)
+	//fmt.Println("Mi estado: ", reply.IdNodo, reply.Mandato, reply.EsLider, reply.IdLider)
 	return nil
 }
 
@@ -531,16 +570,16 @@ func (nr *NodoRaft) PedirVoto(peticion *ArgsPeticionVoto,
 	reply *RespuestaPeticionVoto) error {
 
 	fmt.Println(nr.Yo, ". Me han pedido que vote a", peticion.CandidateId)
-
+	reply.VoteGranted = false
 	// Vuestro codigo aqui
 	if peticion.Term < nr.currentTerm {
-		//fmt.Println("el candidato es malo", peticion.CandidateId)
-		reply.VoteGranted = false
+		fmt.Println("el candidato es malo", peticion.CandidateId)
+
 		reply.Term = nr.currentTerm
 		// el que llama a este rpc se vuelve follower
 	} else if peticion.Term >= nr.currentTerm {
 		if peticion.Term > nr.currentTerm {
-			//fmt.Println(nr.Yo, ". Voy retrasado", peticion.CandidateId)
+			fmt.Println(nr.Yo, ". Voy retrasado, mi term", nr.currentTerm, "term de peticion", peticion.Term)
 			//Reiniciar votedFor
 			nr.votedFor = -1
 			nr.currentTerm = peticion.Term
@@ -548,14 +587,17 @@ func (nr *NodoRaft) PedirVoto(peticion *ArgsPeticionVoto,
 			nr.IdLider = -1
 		}
 
-		if nr.votedFor == -1 &&
-			(peticion.LastLogTerm > nr.log[nr.logIndex].Indice || (peticion.LastLogTerm == nr.log[nr.logIndex].Indice && peticion.LastLogIndex >= nr.logIndex)) {
+		if nr.IdLider != nr.Yo {
+			if nr.votedFor == -1 &&
+				(peticion.LastLogTerm > nr.log[nr.logIndex].Indice || (peticion.LastLogTerm == nr.log[nr.logIndex].Indice && peticion.LastLogIndex >= nr.logIndex)) {
 
-			fmt.Println(nr.Yo, ". he votado a", peticion.CandidateId)
-			nr.votedFor = peticion.CandidateId
-			reply.VoteGranted = true
+				fmt.Println(nr.Yo, ". he votado a", peticion.CandidateId)
+				nr.votedFor = peticion.CandidateId
+				reply.VoteGranted = true
+			}
+			nr.chReinicioTimeout <- true
 		}
-		nr.chReinicioTimeout <- true
+
 	}
 	return nil
 }
@@ -585,7 +627,7 @@ func (nr *NodoRaft) AppendEntries(args *ArgAppendEntries,
 	results *Results) error {
 	// Completar....
 	//fmt.Println(nr.Yo, ". Me ha llegado AppendEntries de", args.LeaderId)
-
+	aux := nr.logIndex
 	switch {
 	case args.Term < nr.currentTerm:
 		//fmt.Println(nr.Yo, ". AppendEntries -> args.Term < nr.currentTerm")
@@ -614,10 +656,14 @@ func (nr *NodoRaft) AppendEntries(args *ArgAppendEntries,
 				for ; i < len(args.Entries); i++ {
 					nr.log[args.PrevLogIndex+1+i] = args.Entries[i]
 				}
+
+				//nr.Mux.Lock()
 				nr.logIndex = args.PrevLogIndex + i
+				aux = nr.logIndex
+				//nr.Mux.Unlock()
+
 				results.Success = true
 				fmt.Println(nr.Yo, ". He hecho commit en log: ", nr.log)
-
 			}
 		}
 
@@ -627,17 +673,18 @@ func (nr *NodoRaft) AppendEntries(args *ArgAppendEntries,
 
 	if args.LeaderCommit > nr.commitIndex {
 
-		if args.LeaderCommit < nr.logIndex {
+		if args.LeaderCommit < aux {
 			nr.commitIndex = args.LeaderCommit
 		} else {
-			nr.commitIndex = nr.logIndex
+			nr.commitIndex = aux
 		}
-		fmt.Println(nr.Yo, "LeaderCommit: ", args.LeaderCommit)
+		/*fmt.Println(nr.Yo, "LeaderCommit: ", args.LeaderCommit)
 		fmt.Println(nr.Yo, "CommitIndex: ", nr.commitIndex)
-		fmt.Println(nr.Yo, "LogIndex: ", nr.logIndex)
+		fmt.Println(nr.Yo, "LogIndex: ", aux)*/
 	}
 
 	return nil
+
 }
 
 // ----- Metodos/Funciones a utilizar como clientes
@@ -684,29 +731,31 @@ func (nr *NodoRaft) enviarPeticionVoto(nodo int, args *ArgsPeticionVoto,
 	for {
 		switch {
 		case nr.IdLider == nr.Yo:
+			fmt.Println(nr.Yo, " .Ya soy lider, saliendo de enviarPeticionVoto")
 			return true
 		case args.Term != nr.currentTerm: //Ya no eres candidato, estamos en otro term
-			//fmt.Println(nr.Yo, " .No soy candidato")
+			fmt.Println(nr.Yo, " .No soy candidato estamos en otro term")
 			return true
 		case err != nil:
-			fmt.Println(nr.Yo, ". otro try candidato, Error Pedir Voto a ", nodo)
+			//fmt.Println(nr.Yo, ". otro try candidato, Error Pedir Voto a ", nodo)
 			//Habria que deja tiempo para que no spameara????
 			time.Sleep(1 * time.Second)
 			err = rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.PedirVoto", args, reply, timeout)
 
 		case reply.Term > nr.currentTerm:
-			//fmt.Println(nr.Yo, ". No soy candidato voy de lado") //Habria que cambiar term????
+			fmt.Println(nr.Yo, ". No soy candidato voy de lado") //Habria que cambiar term????
+			nr.currentTerm = reply.Term
 			nr.chReinicioTimeout <- true
 			return true
 		case reply.VoteGranted:
 			if nr.IdLider != nr.Yo { //Mutex
-				//fmt.Println(nr.Yo, ". Me ha votado", nodo)
+				fmt.Println(nr.Yo, ". Me ha votado", nodo)
 				nr.chGotVote <- true
 				return true
 			}
 			return false
 		default:
-			//fmt.Println(nr.Yo, ". Default enviarPeticionVoto")
+			fmt.Println(nr.Yo, ". Default enviarPeticionVoto")
 			//os.Exit(1)
 			return false
 		}

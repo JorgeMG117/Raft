@@ -4,6 +4,7 @@ import (
 	//"errors"
 	//"fmt"
 	//"log"
+	"fmt"
 	"net"
 	"net/rpc"
 	"os"
@@ -27,6 +28,7 @@ func main() {
 	}
 
 	// Parte Servidor
+	fmt.Println(nodos)
 	nr := raft.NuevoNodo(nodos, me, make(chan raft.AplicaOperacion, 1000))
 	rpc.Register(nr)
 

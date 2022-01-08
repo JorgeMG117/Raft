@@ -87,8 +87,8 @@ func executeCmd(cmd, hostname string, config *ssh.ClientConfig) string {
 	return hostname + ": \n" + stdoutBuf.String()
 }
 
-func buildSSHConfig(signer ssh.Signer) *ssh.ClientConfig {
-	//	hostKey ssh.PublicKey) *ssh.ClientConfig {
+func buildSSHConfig(signer ssh.Signer,
+	hostKey ssh.PublicKey) *ssh.ClientConfig {
 
 	return &ssh.ClientConfig{
 		User: os.Getenv("LOGNAME"),
@@ -109,9 +109,8 @@ func execOneHost(hostname string, results chan<- string,
 	signer ssh.Signer, cmd string) {
 	// get host public key
 	// ssh_config must have option "HashKnownHosts no" !!!!
-	//hostKey := getHostKey(hostname)
-	//config := buildSSHConfig(signer, hostKey)
-	config := buildSSHConfig(signer)
+	hostKey := getHostKey(hostname)
+	config := buildSSHConfig(signer, hostKey)
 
 	//fmt.Println(cmd)
 	//fmt.Println(hostname)
