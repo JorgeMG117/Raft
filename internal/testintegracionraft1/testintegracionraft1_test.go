@@ -19,9 +19,9 @@ import (
 
 const (
 	//hosts
-	MAQUINA1 = "127.0.0.1"
-	MAQUINA2 = "127.0.0.1"
-	MAQUINA3 = "127.0.0.1"
+	MAQUINA1 = "155.210.154.200"
+	MAQUINA2 = "155.210.154.201"
+	MAQUINA3 = "155.210.154.202"
 
 	//puertos
 	PUERTOREPLICA1 = "29041"
@@ -46,7 +46,7 @@ const (
 )
 
 // PATH de los ejecutables de modulo golang de servicio Raft
-var PATH string = filepath.Join(os.Getenv("HOME"), "CodigoEsqueleto", "raft")
+var PATH string = filepath.Join(os.Getenv("HOME"), "raft")
 
 // go run cmd/srvraft/main.go 0 127.0.0.1:29001 127.0.0.1:29002 127.0.0.1:29003
 var EXECREPLICACMD string = "cd " + PATH + "; /usr/local/go/bin/go run " + EXECREPLICA
@@ -189,6 +189,7 @@ func (cfg *configDespliegue) elegirPrimerLiderTest2(t *testing.T) {
 	fmt.Println(t.Name(), ".....................")
 
 	cfg.startDistributedProcesses()
+	time.Sleep(10 * time.Second)
 
 	// Se ha elegido lider ?
 	fmt.Printf("Probando lider en curso\n")
@@ -208,6 +209,7 @@ func (cfg *configDespliegue) falloAnteriorElegirNuevoLiderTest3(t *testing.T) {
 	fmt.Println(t.Name(), ".....................")
 
 	cfg.startDistributedProcesses()
+	time.Sleep(10 * time.Second)
 
 	fmt.Printf("Lider inicial\n")
 	lider := cfg.pruebaUnLider(3)
@@ -237,6 +239,7 @@ func (cfg *configDespliegue) tresOperacionesComprometidasEstable(t *testing.T) {
 	fmt.Println(t.Name(), ".....................")
 
 	cfg.startDistributedProcesses()
+	time.Sleep(10 * time.Second)
 
 	lider := cfg.pruebaUnLider(3)
 	fmt.Println("El lider es", lider)
@@ -258,13 +261,13 @@ func (cfg *configDespliegue) tresOperacionesComprometidasEstable(t *testing.T) {
 
 // Se consigue acuerdo a pesar de desconexiones de seguidor -- 3 NODOS RAFT
 func (cfg *configDespliegue) AcuerdoApesarDeSeguidor(t *testing.T) {
-	t.Skip("SKIPPED AcuerdoApesarDeSeguidor")
+	//t.Skip("SKIPPED AcuerdoApesarDeSeguidor")
 
 	// A completar ???
 	fmt.Println(t.Name(), ".....................")
 
 	cfg.startDistributedProcesses()
-
+	time.Sleep(10 * time.Second)
 	// Comprometer una entrada
 	//time.Sleep(10 * time.Second)
 	fmt.Printf("Comprometiendo una entrada: 0, leer, nueva\n")
@@ -311,12 +314,13 @@ func (cfg *configDespliegue) AcuerdoApesarDeSeguidor(t *testing.T) {
 
 // NO se consigue acuerdo al desconectarse mayoría de seguidores -- 3 NODOS RAFT
 func (cfg *configDespliegue) SinAcuerdoPorFallos(t *testing.T) {
-	//t.Skip("SKIPPED SinAcuerdoPorFallos")
+	t.Skip("SKIPPED SinAcuerdoPorFallos")
 
 	// A completar ???
 	fmt.Println(t.Name(), ".....................")
 
 	cfg.startDistributedProcesses()
+	time.Sleep(10 * time.Second)
 
 	// Comprometer una entrada
 	cfg.comprometerUnaEntrada(0, "escribir", "nueva", "afjsl")
@@ -344,7 +348,7 @@ func (cfg *configDespliegue) SinAcuerdoPorFallos(t *testing.T) {
 	cfg.startDistributedProcess(seguidor)
 	fmt.Printf("Reconectando nodo: %d\n", seguidor2)
 	cfg.startDistributedProcess(seguidor2)
-	//time.Sleep(30 * time.Second)
+	time.Sleep(10 * time.Second)
 	if cfg.comprobarEntradaComprometida(seguidor, i+1) {
 		fmt.Printf("Correcto: Hay %d entradas comprometidas\n", i+1)
 	} else {
@@ -369,6 +373,7 @@ func (cfg *configDespliegue) SometerConcurrentementeOperaciones(t *testing.T) {
 	fmt.Println(t.Name(), ".....................")
 
 	cfg.startDistributedProcesses()
+	//time.Sleep(10 * time.Second)
 
 	// un bucle para estabilizar la ejecucion
 	time.Sleep(10 * time.Second)
@@ -439,13 +444,13 @@ func (cfg *configDespliegue) comprometerUnaEntrada(lider int, operacion string, 
 	args := raft.TipoOperacion{Operacion: operacion, Clave: clave, Valor: valor}
 	//No sabemos quien es el lider, preguntamos a 0
 	err := cfg.nodosRaft[lider].CallTimeout("NodoRaft.SometerOperacionRaft",
-		args, &reply, 2*time.Second)
+		args, &reply, 1*time.Second)
 	//check.CheckError(err, "Error en llamada RPC Para nodo")
 	for {
 		switch {
 		case err != nil:
 			fmt.Println("Error comprometer una entrada")
-			return -1
+			return 0
 		case !reply.EsLider:
 			fmt.Println("Redirigiendo comprometer una entrada a nodo", reply.IdLider)
 			err = cfg.nodosRaft[reply.IdLider].CallTimeout("NodoRaft.SometerOperacionRaft",
@@ -537,7 +542,7 @@ func (cfg *configDespliegue) obtenerEstadoRemoto(
 	indiceNodo int) (int, int, bool, int) {
 	var reply raft.EstadoRemoto
 	err := cfg.nodosRaft[indiceNodo].CallTimeout("NodoRaft.ObtenerEstadoNodo",
-		raft.Vacio{}, &reply, 10*time.Millisecond)
+		raft.Vacio{}, &reply, 1000*time.Millisecond)
 	check.CheckError(err, "Error en llamada RPC ObtenerEstadoRemoto")
 
 	return reply.IdNodo, reply.Mandato, reply.EsLider, reply.IdLider

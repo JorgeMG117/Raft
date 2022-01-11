@@ -154,7 +154,7 @@ func NuevoNodo(nodos []rpctimeout.HostPort, yo int,
 
 	//nr.electionTimeout = time.Millisecond*10000*(time.Duration(nr.Yo)+1) + time.Millisecond*time.Duration(nr.Yo)*10000
 	rand.Seed(int64(nr.Yo))
-	nr.electionTimeout = time.Millisecond * time.Duration(rand.Intn(500)+1000)
+	nr.electionTimeout = time.Millisecond * time.Duration(rand.Intn(1500)+1000*nr.Yo)
 	fmt.Println(nr.Yo, "Election timeout:", nr.electionTimeout)
 	nr.currentTerm = 0
 	nr.votedFor = -1
@@ -170,6 +170,7 @@ func NuevoNodo(nodos []rpctimeout.HostPort, yo int,
 	nr.matchIndex = make([]int, len(nr.Nodos))
 
 	nr.logIndex = 0
+	nr.maquinaDeEstados = make(map[string]string)
 	//nr.Mux.Unlock()
 
 	go gestionNodo(nr)
@@ -268,7 +269,7 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 				exit = true
 				//return false
 			case err != nil:
-				fmt.Println(nr.Yo, ". Error Append Entries", nodo, " ", err.Error())
+				//fmt.Println(nr.Yo, ". Error Append Entries", nodo, " ", err.Error())
 				//fmt.Fprintf(os.Stderr, "In: %s, Fatal error: %s", comment, err.Error())
 				time.Sleep(200 * time.Millisecond)
 				err = rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.AppendEntries", args, reply, timeout)
@@ -279,7 +280,9 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 				fmt.Println(nr.Yo, ". No se ha conseguido replicar entrada a", nodo, "nr.nextIndex[nodo]: ", nr.nextIndex[nodo])
 				//entries := nr.log[(nr.nextIndex[nodo]):(nr.commitIndex + 1)]
 				entries := nr.log[(nr.nextIndex[nodo]):(nr.logIndex + 1)]
-				args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[nodo] - 1, nr.log[nr.nextIndex[nodo]-1].Indice, entries, nr.commitIndex, args.chCommit}
+				//args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[nodo] - 1, nr.log[nr.nextIndex[nodo]-1].Indice, entries, nr.commitIndex, args.chCommit}
+				args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[nodo] - 1, nr.log[nr.nextIndex[nodo]-1].Indice, entries, nr.commitIndex}
+
 				rpctimeout.HostPort.CallTimeout(nr.Nodos[nodo], "NodoRaft.AppendEntries", args, reply, timeout)
 
 			case reply.Success && (len(args.Entries) > 0):
@@ -290,7 +293,7 @@ func (nr *NodoRaft) enviarAppendEntries(nodo int, args *ArgAppendEntries, reply 
 				nr.matchIndex[nodo] = nr.logIndex
 				fmt.Println(nr.Yo, ". Se ha conseguido replicar entrada a", nodo, "nr.nextIndex[nodo]: ", nr.nextIndex[nodo])
 				exit = true
-				args.chCommit <- true
+				//args.chCommit <- true
 			default:
 				//fmt.Println(nr.Yo, ". Default enviarAppendEntries")
 				//os.Exit(1)
@@ -318,7 +321,7 @@ func leader(nr *NodoRaft) {
 			var entries []AplicaOperacion
 			for i := range nr.Nodos {
 				if i != nr.Yo {
-					args := ArgAppendEntries{nr.currentTerm, nr.Yo, 0, 0, entries, nr.commitIndex, make(chan bool, 1)}
+					args := ArgAppendEntries{nr.currentTerm, nr.Yo, 0, 0, entries, nr.commitIndex}
 					reply := Results{}
 					//fmt.Println("enviando latidos")
 					go nr.enviarAppendEntries(i, &args, &reply)
@@ -410,7 +413,8 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 	nr.log[nr.logIndex].Indice = nr.currentTerm
 	nr.matchIndex[nr.Yo] = nr.logIndex
 
-	chCommit := make(chan bool, 1)
+	//chCommit := make(chan bool, 1)
+	done := make(chan string, 1)
 
 	for i := range nr.Nodos {
 		if i != nr.Yo {
@@ -418,21 +422,25 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 			//fmt.Println("nextIndex: ", nr.nextIndex[i])
 			//fmt.Println("nextIndexYO: ", nr.nextIndex[nr.Yo])
 			fmt.Println("Vamos a enviar:", entries)
-			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[i] - 1, nr.log[nr.nextIndex[i]-1].Indice, entries, nr.commitIndex, chCommit}
+			//args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[i] - 1, nr.log[nr.nextIndex[i]-1].Indice, entries, nr.commitIndex, chCommit}
+			args := ArgAppendEntries{nr.currentTerm, nr.Yo, nr.nextIndex[i] - 1, nr.log[nr.nextIndex[i]-1].Indice, entries, nr.commitIndex}
+
 			reply := Results{}
 			fmt.Println("enviando op")
 			go nr.enviarAppendEntries(i, &args, &reply)
 		}
 	}
 
-	for i := 0; i < (len(nr.Nodos)-1)/2; i++ {
+	go actualizarMaquinaEstados2(nr, indiceAux, done)
+	/*for i := 0; i < (len(nr.Nodos)-1)/2; i++ {
 		<-chCommit
-	}
+	}*/
 
 	/*if nr.log[indiceAux].Indice == nr.currentTerm {
 		fmt.Println(nr.Yo, ". Ya es seguro hacer commit, commitIndex =", indiceAux)
 		nr.commitIndex = indiceAux
 	}*/
+	valorADevolver = <-done
 
 	//fmt.Println("someter operacion ", nr.Yo)
 	return indiceAux, nr.currentTerm, true, nr.IdLider, valorADevolver //Ojo con lo que devuelve nr.commitIndex
@@ -442,10 +450,29 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 of matchIndex[i] ≥ N, and log[N].term == currentTerm:
 set commitIndex = N */
 
+func actualizarMaquinaEstados2(nr *NodoRaft, indice int, done chan string) {
+	out := false
+	for !out {
+		if nr.Yo == nr.IdLider && nr.commitIndex >= indice && indice == nr.lastApplied+1 {
+			if nr.log[nr.lastApplied].Operacion.Operacion == "leer" {
+				done <- nr.maquinaDeEstados[nr.log[nr.lastApplied].Operacion.Clave]
+			} else if nr.log[nr.lastApplied].Operacion.Operacion == "escribir" {
+				nr.maquinaDeEstados[nr.log[nr.lastApplied].Operacion.Clave] = nr.log[nr.lastApplied].Operacion.Valor
+				done <- "Valor escrito"
+			} else {
+				done <- "Operacion no reconocida"
+			}
+			nr.lastApplied++
+			out = true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func actualizarMaquinaEstados(nr *NodoRaft) {
 	for {
 		time.Sleep(100 * time.Millisecond)
-		if nr.commitIndex > nr.lastApplied {
+		if nr.commitIndex > nr.lastApplied && nr.Yo != nr.IdLider {
 			nr.lastApplied++
 
 			if nr.log[nr.lastApplied].Operacion.Operacion == "leer" {
@@ -613,7 +640,7 @@ type ArgAppendEntries struct {
 
 	LeaderCommit int
 
-	chCommit chan bool
+	//chCommit chan bool
 }
 
 type Results struct {
