@@ -180,7 +180,6 @@ func NuevoNodo(nodos []rpctimeout.HostPort, yo int,
 }
 
 func gestionNodo(nr *NodoRaft) {
-	//time.Sleep(1 * time.Second)
 	for {
 		_, _, esLider, _ := nr.obtenerEstado()
 		switch esLider {
@@ -389,23 +388,13 @@ func (nr *NodoRaft) obtenerEstado() (int, int, bool, int) {
 // Cuarto valor es el lider, es el indice del líder si no es él
 func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 	bool, int, string) {
-	//indice := -1
-	//mandato := -1
-	//EsLider := false
-	//idLider := -1
+
 	valorADevolver := ""
 
 	// Si el nodo no es el lider, devolver falso
 	if nr.IdLider != nr.Yo {
 		return -1, nr.currentTerm, false, nr.IdLider, valorADevolver
 	}
-
-	//si eres lider
-	//Meter nosostros en el log
-	/*
-		nr.commitIndex = nr.commitIndex + 1
-		nr.log[nr.commitIndex].Operacion = operacion
-		nr.log[nr.commitIndex].Indice = nr.currentTerm*/
 
 	nr.logIndex++
 	indiceAux := nr.logIndex
@@ -432,14 +421,7 @@ func (nr *NodoRaft) someterOperacion(operacion TipoOperacion) (int, int,
 	}
 
 	go actualizarMaquinaEstados2(nr, indiceAux, done)
-	/*for i := 0; i < (len(nr.Nodos)-1)/2; i++ {
-		<-chCommit
-	}*/
 
-	/*if nr.log[indiceAux].Indice == nr.currentTerm {
-		fmt.Println(nr.Yo, ". Ya es seguro hacer commit, commitIndex =", indiceAux)
-		nr.commitIndex = indiceAux
-	}*/
 	valorADevolver = <-done
 
 	//fmt.Println("someter operacion ", nr.Yo)
